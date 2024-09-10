@@ -1,0 +1,60 @@
+services:
+  certbot:
+    image: certbot/certbot
+    container_name: certbot
+    volumes:
+      - mongo_ssl_data:/etc/letsencrypt
+    ports:
+      - "80:80"
+      - "443:443"
+    entrypoint: |
+      sh -c '
+        if [[ ! -f /etc/letsencrypt/live/yourdomain.name/fullchain.pem ]]; then
+          certbot certonly --staging --non-interactive --standalone --agree-tos --email thomas@starknet.id -d yourdomain.name;
+        fi;
+
+        # Combine the private key and certificate into cert.pem
+        cat /etc/letsencrypt/live/yourdomain.name/privkey.pem >> /etc/letsencrypt/live/yourdomain.name/cert.pem;
+
+        # Set permissions for the entire /etc/letsencrypt directory
+        chmod -R 755 /etc/letsencrypt;
+
+        trap exit TERM;
+        while :; do
+          certbot renew;
+          chmod -R 755 /etc/letsencrypt;
+          sleep 12h;
+        done
+      '
+    healthcheck:
+      test:
+        ["CMD", "test", "-f", "/etc/letsencrypt/live/yourdomain.name/cert.pem"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  mongo:
+    image: mongo:8.0.0-rc20
+    container_name: gladiapet_mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: TO_CHANGE
+    ports:
+      - 0.0.0.0:27017:27017
+    volumes:
+      - mongo_data:/data/db
+      - mongo_ssl_data:/etc/letsencrypt
+    command: >
+      mongod --tlsMode requireTLS
+            --tlsCertificateKeyFile /etc/letsencrypt/live/yourdomain.name/cert.pem
+            --tlsCAFile /etc/letsencrypt/live/yourdomain.name/fullchain.pem
+            --tlsAllowConnectionsWithoutCertificates
+    depends_on:
+      certbot:
+        condition: service_healthy
+
+volumes:
+  mongo_data:
+  mongo_ssl_data:
